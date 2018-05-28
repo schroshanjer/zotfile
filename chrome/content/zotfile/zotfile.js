@@ -1562,6 +1562,9 @@ Zotero.ZotFile = {
     },
 
     wildcardTable: function(item) {
+        ModifyAuthorPos(item);
+        ModifyJAbb(item);
+        item.save();
         var getCollectionPathsOfItem = function(item) {
             var getCollectionPath = function(collectionID) {
                 var collection = Zotero.Collections.get(collectionID);
@@ -1593,7 +1596,9 @@ Zotero.ZotFile = {
             "lastAuthor_lastInitial": authors[8],
             "lastAuthor_lastf": authors[9],
             "lastAuthor_initials": authors[10],
+            "NBname": getNBAuthorname(item),
             "collectionPaths": getCollectionPathsOfItem(item)
+
         };
         // define transform functions
         var itemtypeWildcard = function(item, map) {
@@ -4000,3 +4005,191 @@ Zotero.ZotFile = {
     }
 
 };
+
+
+function genJAbb(Joname) {
+    var jabb
+    //direct replace lists
+    replacedict={
+        'nature':'Nature',
+        'science':'Science',
+        'nature materials':'NatMat',
+        'annual review of condensed matter physics':'AnnRevCMP',
+        'nature communications':'NatComm',
+        'nature physics':'NatPhy',
+        'europhysics letters':'EPL',
+        'journal of physics: Condensed Matter':'condmat',
+        'nano letters':'NanoLett'
+    }
+    var jnlc=Joname.toLowerCase()
+    if(jnlc in replacedict){
+        jabb=replacedict[jnlc];
+        return jabb;
+    }
+
+    //Annual Review (XXX) ->AnnRevXXX
+    var patt=/(Annual Review)/i
+    if(patt.test(Joname)){
+        jabb=Joname.replace(/Annual Review/i,'');
+        jabb='AnnRev'+jabb.replace(/[^A-Z]/g,'')
+        return jabb;
+    }
+
+    //extract upper letter (if more than 3)
+    jabb=Joname.replace(/[^A-Z]/g,'');
+    if(jabb.length>=3){
+        return jabb;
+    }
+
+    //extrat word (except 'of' and 'the')
+    var words=Joname.split(' ');
+    var newwords=[]
+    var jj=0;
+    for(var ii=0;ii<words.length;ii++){
+        if(words[ii]&&words[ii]!='of'&&words[ii]!='the'){
+            newwords[jj]=words[ii];
+            jj++;
+        }
+    }
+    words=newwords;
+    //console.log(words);
+
+    //Physica
+    if(words[0]=='Physica'){
+        return words[0]+words[1];
+    }
+
+    //arXiv
+    var patt=/arXiv/i
+    if(patt.test(Joname)){
+        return 'arXiv';
+    }
+
+    //Nature Science
+    if(words.length==1){
+        return words[0];
+    }
+
+    //NatPhy
+    if(words.length>=2){
+        jabb='';
+        var word;
+        for(var iii=0;iii<words.length;iii++){
+            word=words[iii];
+            if(word.length<=3){
+                jabb+=word;
+            }
+            else{
+                jabb+=word[0]+word[1]+word[2];
+            }
+        }
+        return jabb;
+    }
+}
+function ModifyJAbb(item) {
+    jname=item.getField('publicationTitle');
+    abb=item.getField('journalAbbreviation');
+    var patt=/ /;
+    if(!abb||patt.test(abb)){
+        item.setField("journalAbbreviation",genJAbb(jname));
+    }
+    //item.save();
+}
+function ModifyAuthorPos(item) {
+    //get order from 'extra' e.g. {SeniorAuthor: 1} or [-1]
+    var extrastr=item.getField('extra')//edit
+    //alert(extrastr);
+    var bossindex=-1;
+    var patt1=new RegExp("\{SeniorAuthor[ ]*:[ ]*[0-9\-]+\}",'m');
+    var result=patt1.exec(extrastr)
+    var isorder=0;
+    if (result){
+        console.log(result)
+        var numstr=result[0]
+        extrastr=extrastr.replace(numstr,'{SeniorAuthor: 0}')
+        bossindex=parseInt(numstr.replace('{SeniorAuthor','').replace('}','').replace(' ','').replace(':',''))
+        isorder=1;
+    }
+    else{
+        var patt1=new RegExp("\[[0-9\-]+\]",'m');
+        var result2=patt1.exec(extrastr)
+        if (result2){
+            var numstr=result2[0]
+            extrastr=extrastr.replace(numstr,'{SeniorAuthor: 0}')
+            bossindex=parseInt(numstr.replace('[','').replace(']',''))
+            if(bossindex==0){
+                item.setField('extra',extrastr);
+            }
+            isorder=1;
+        }
+        else if(extrastr){
+            extrastr+='\n{SeniorAuthor: 0}'
+        }
+        else{
+            extrastr='{SeniorAuthor: 0}'
+        }
+    }
+    if(bossindex==0){return;}
+
+    //get author info and published year
+    var creators_point=item.getCreators();
+    var len=creators_point.length;
+    creators=new Array();
+    var ddate=item.getField('date');
+    var patt1=new RegExp("\\d{4}");
+    var year=parseInt(patt1.exec(ddate));
+    //get year
+
+
+    //if no order and people less than # or year before # ---> not work
+    var peoplemorethan = 4;
+    var yearafter = 2009;
+    if(!isorder){
+        if (year<=yearafter||len<=peoplemorethan){return;}
+    }
+
+
+    //change author position 
+    for(var i=0;i<creators_point.length;i++)
+        creators[i]=creators_point[i];
+    if(bossindex<0){bossindex=len+bossindex}
+    if(bossindex>=len){bossindex=bossindex%len}
+    var ss= new Zotero.Creator;
+    ss.firstName = creators[bossindex].ref.firstName;
+    ss.lastName = creators[bossindex].ref.lastName;
+    item.setCreator(0,ss,'author');
+    var newnum=0;
+    for(var oldnum=0;oldnum<len;oldnum++){
+        if(oldnum!=bossindex){
+            newnum+=1;     
+            var ss= new Zotero.Creator;
+            ss.firstName = creators[oldnum].ref.firstName;
+            ss.lastName = creators[oldnum].ref.lastName;
+            //console.log(creators[1].ref.lastName);
+            item.setCreator(newnum,ss,'author');
+        }
+    }
+    item.setField('extra',extrastr)
+}
+
+
+function getNBAuthorname(item) {
+    var creators = item.getCreators();
+    firstname=creators[0].ref.firstName;
+    lastname=creators[0].ref.lastName;
+
+    //if F or L is empty -> return last word of F+L
+
+    if(!firstname.replace(/\s+/,'')||!lastname.replace(/\s+/,'')){
+        var name=firstname+' '+lastname;
+        var name=name.replace(/^\s+/,'').replace(/\s+$/,'')
+        var names=name.split(' ')
+        name=names[names.length-1]
+        return name
+    }
+
+    //no empty -> return lastname
+    name=lastname
+    return name;
+    
+}
